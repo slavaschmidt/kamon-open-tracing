@@ -1,7 +1,8 @@
+package kamon.context
+
 import java.net.{URLDecoder, URLEncoder}
 
 import kamon.Kamon
-import kamon.context._
 import kamon.context.HttpPropagation.{HeaderReader, HeaderWriter}
 import kamon.trace._
 import kamon.trace.Trace.SamplingDecision
@@ -23,7 +24,7 @@ class UberSpanCodec extends Propagation.EntryReader[HeaderReader] with Propagati
       val sampling = encodeSamplingDecision(span.trace.samplingDecision)
       val debug: Byte = 0
       val flags = (sampling + (debug << 1)).toHexString
-      val headerValue = s"${span.trace.id.string}:${span.id.string}:$parentContext:$flags"
+      val headerValue = Seq(span.trace.id.string, span.id.string, parentContext, flags).mkString(":")
 
       writer.write(HeaderName, urlEncode(headerValue))
     }
@@ -33,7 +34,7 @@ class UberSpanCodec extends Propagation.EntryReader[HeaderReader] with Propagati
   override def read(reader: HttpPropagation.HeaderReader, context: Context): Context = {
     val identifierScheme = Kamon.identifierScheme
     val header = reader.read(HeaderName)
-    val parts = header.toSeq.flatMap(_.split(':')).toList
+    val parts: List[String] = header.toList.flatMap(_.split(':'))
 
     parts match {
       case traceID :: spanID :: parentContext :: tail =>
@@ -45,9 +46,9 @@ class UberSpanCodec extends Propagation.EntryReader[HeaderReader] with Propagati
           val parent = string2Identifier(parentContext).map(id => identifierScheme.traceIdFactory.from(urlDecode(id)))
 
           val samplingDecision = tail match {
-            case List(f) if f.nonEmpty && f.equalsIgnoreCase("d") => SamplingDecision.Sample
-            case List(f) if f.nonEmpty && Integer.parseInt(f, 16) % 2 == 1 => SamplingDecision.Sample
-            case List(f) if f.nonEmpty && Integer.parseInt(f, 16) % 2 == 0 => SamplingDecision.DoNotSample
+            case f :: Nil if f.equalsIgnoreCase("d") => SamplingDecision.Sample
+            case f :: Nil if f.nonEmpty && Integer.parseInt(f, 16) % 2 == 1 => SamplingDecision.Sample
+            case f :: Nil if f.nonEmpty && Integer.parseInt(f, 16) % 2 == 0 => SamplingDecision.DoNotSample
             case _ => SamplingDecision.Unknown
           }
           context.withEntry(Span.Key, Span.Remote(get(span), get(parent), Trace(get(trace), samplingDecision)))

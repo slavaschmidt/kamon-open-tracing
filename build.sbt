@@ -2,7 +2,7 @@ name := "kamon-open-tracing"
 
 organization := "org.slasch"
 
-version := "0.1"
+version := "1.0"
 
 scalaVersion := "2.12.9"
 
@@ -22,7 +22,7 @@ libraryDependencies += "io.kamon" %% "kamon-core" % "2.0.0" % Provided
 
 publishMavenStyle := true
 
-bintrayOrganization := Some("org.slasch")
+bintrayOrganization := None
 
 bintrayRepository   := "maven"
 
