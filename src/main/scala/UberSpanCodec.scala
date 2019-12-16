@@ -72,7 +72,7 @@ class UberSpanCodec extends Propagation.EntryReader[HeaderReader] with Propagati
   private def encodeSamplingDecision(samplingDecision: SamplingDecision): Byte = samplingDecision match {
     case SamplingDecision.Sample      => 1
     case SamplingDecision.DoNotSample => 0
-    case SamplingDecision.Unknown     => 1 // the sampling decision is mandatory in this format
+    case SamplingDecision.Unknown     => 0 // the sampling decision is mandatory in this format
   }
 
 
