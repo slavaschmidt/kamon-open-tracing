@@ -2,7 +2,7 @@ name := "kamon-open-tracing"
 
 organization := "org.slasch"
 
-version := "1.0"
+version := "1.3"
 
 scalaVersion := "2.12.9"
 

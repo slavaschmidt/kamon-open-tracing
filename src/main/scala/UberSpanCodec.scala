@@ -7,24 +7,29 @@ import kamon.context.HttpPropagation.{HeaderReader, HeaderWriter}
 import kamon.trace._
 import kamon.trace.Trace.SamplingDecision
 
+import scala.util.Try
+
 // see https://www.jaegertracing.io/docs/1.7/client-libraries/#propagation-format for more details
 object UberSpanCodec {
   def apply(): UberSpanCodec = new UberSpanCodec()
   val HeaderName = "uber-trace-id"
+  val Separator = ":"
+  val Default = "0"
+  val DebugFlag = "d"
 }
 
 class UberSpanCodec extends Propagation.EntryReader[HeaderReader] with Propagation.EntryWriter[HeaderWriter] {
-  import UberSpanCodec.HeaderName
+  import UberSpanCodec._
 
   override def write(context: Context, writer: HttpPropagation.HeaderWriter): Unit = {
     val span = context.get(Span.Key)
 
     if (span != Span.Empty) {
-      val parentContext = if (span.parentId != Identifier.Empty) span.parentId.string else "0"
+      val parentContext = if (span.parentId != Identifier.Empty) span.parentId.string else Default
       val sampling = encodeSamplingDecision(span.trace.samplingDecision)
       val debug: Byte = 0
       val flags = (sampling + (debug << 1)).toHexString
-      val headerValue = Seq(span.trace.id.string, span.id.string, parentContext, flags).mkString(":")
+      val headerValue = Seq(span.trace.id.string, span.id.string, parentContext, flags).mkString(Separator)
 
       writer.write(HeaderName, urlEncode(headerValue))
     }
@@ -34,38 +39,42 @@ class UberSpanCodec extends Propagation.EntryReader[HeaderReader] with Propagati
   override def read(reader: HttpPropagation.HeaderReader, context: Context): Context = {
     val identifierScheme = Kamon.identifierScheme
     val header = reader.read(HeaderName)
-    val parts: List[String] = header.toList.flatMap(_.split(':'))
+    val headerParts = header.toList.map(urlDecode).flatMap(_.split(':'))
+    val parts = headerParts ++ List.fill(4)("") // all parts are mandatory, but we want to be resilient
 
-    parts match {
-      case traceID :: spanID :: parentContext :: tail =>
-        val trace = string2Identifier(traceID).map(id => identifierScheme.traceIdFactory.from(urlDecode(id)))
+    val List(traceID, spanID, parentContext, flags) = parts.take(4)
+    val trace = stringToId(identifierScheme, traceID)
+    val span = stringToId(identifierScheme, spanID)
 
-        val span = string2Identifier(spanID).map(id => identifierScheme.traceIdFactory.from(urlDecode(id)))
-
-        if (trace.isDefined && span.isDefined) {
-          val parent = string2Identifier(parentContext).map(id => identifierScheme.traceIdFactory.from(urlDecode(id)))
-
-          val samplingDecision = tail match {
-            case f :: Nil if f.equalsIgnoreCase("d") => SamplingDecision.Sample
-            case f :: Nil if f.nonEmpty && Integer.parseInt(f, 16) % 2 == 1 => SamplingDecision.Sample
-            case f :: Nil if f.nonEmpty && Integer.parseInt(f, 16) % 2 == 0 => SamplingDecision.DoNotSample
-            case _ => SamplingDecision.Unknown
-          }
-          context.withEntry(Span.Key, Span.Remote(get(span), get(parent), Trace(get(trace), samplingDecision)))
-        } else context
-      case _ => context
+    if (trace != Identifier.Empty && span != Identifier.Empty) {
+      val parent = stringToId(identifierScheme, parentContext)
+      val samplingDecision = decodeSamplingDecision(flags)
+      context.withEntry(Span.Key, Span.Remote(span, parent, Trace(trace, samplingDecision)))
+    } else {
+      context
     }
   }
 
-  private def get(s: Option[Identifier]): Identifier = s.getOrElse(Identifier.Empty)
+  private def stringToId(identifierScheme: Identifier.Scheme, s: String) = {
+    val str = if (s == null || s.isEmpty) None else Option(s)
+    val id = str.map(urlDecode).map(identifierScheme.traceIdFactory.from)
+    id.getOrElse(Identifier.Empty)
+  }
 
-  private def string2Identifier(s: String) = if (s == null || s.isEmpty) None else Option(s)
+  private def lowestBit(s: String) = Try(Integer.parseInt(s, 16) % 2).toOption
+
+  private def decodeSamplingDecision(flags: String) =
+    if (flags.equalsIgnoreCase(DebugFlag)) SamplingDecision.Sample
+    else if (lowestBit(flags).contains(1)) SamplingDecision.Sample
+    else if (lowestBit(flags).contains(0)) SamplingDecision.DoNotSample
+    else SamplingDecision.Unknown
 
   private def encodeSamplingDecision(samplingDecision: SamplingDecision): Byte = samplingDecision match {
     case SamplingDecision.Sample      => 1
     case SamplingDecision.DoNotSample => 0
-    case SamplingDecision.Unknown     => 1
+    case SamplingDecision.Unknown     => 1 // the sampling decision is mandatory in this format
   }
+
 
   private def urlEncode(s: String): String = URLEncoder.encode(s, "UTF-8")
   private def urlDecode(s: String): String = URLDecoder.decode(s, "UTF-8")
